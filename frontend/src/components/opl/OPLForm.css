@@ -1,0 +1,64 @@
+.opl-form-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.opl-form-dialog {
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 24px;
+  width: 560px;
+  max-width: 95vw;
+  max-height: 90vh;
+  overflow: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.opl-form-title {
+  margin-bottom: 20px;
+  font-size: 16px;
+}
+
+.opl-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-row-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.opl-textarea-resize {
+  resize: vertical;
+}
+
+.opl-input-readonly {
+  background: #f9fafb;
+}
+
+.opl-form-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin: 0;
+}
+
+.opl-form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}

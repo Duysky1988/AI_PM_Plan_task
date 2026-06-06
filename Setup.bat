@@ -74,8 +74,35 @@ exit /b 1
 
 :done
 echo.
+
+REM ── Frontend npm install ───────────────────────────────────────────────────────
+set "NODE_DIR=%APPDATA%\fnm\aliases\default"
+if exist "%NODE_DIR%\node.exe" (
+  if not exist "%ROOT%\frontend\node_modules" (
+    echo  Installing frontend dependencies (npm install)...
+    set HTTPS_PROXY=http://rb-proxy-apac.bosch.com:8080
+    set HTTP_PROXY=http://rb-proxy-apac.bosch.com:8080
+    "%NODE_DIR%\node.exe" "%NODE_DIR%\node_modules\npm\bin\npm-cli.js" --prefix "%ROOT%\frontend" install
+    if errorlevel 1 (
+      echo  WARNING: npm install failed. Dev.bat may not work until you run npm install manually in frontend/.
+    ) else (
+      echo  Frontend dependencies installed OK.
+    )
+  ) else (
+    echo  Frontend node_modules already exists - skipping npm install.
+  )
+) else (
+  echo  NOTE: Node.js ^(fnm^) not found — skipping frontend npm install.
+  echo  To enable hot-reload dev mode, install Node via fnm and run:
+  echo    cd frontend ^&^& npm install
+)
+
+echo.
 echo  ============================================================
-echo   Setup complete! Run Start.bat to launch the app.
+echo   Setup complete!
+echo   - Run Start.bat   to serve production build  ^(port 8080^)
+echo   - Run Dev.bat     to run hot-reload dev mode ^(port 5173^)
+echo   - Run Build.bat   to rebuild frontend only
 echo  ============================================================
 echo.
 pause

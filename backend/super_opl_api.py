@@ -17,8 +17,10 @@ Endpoints:
 """
 
 import json
+import logging
 import os
 import io
+import tempfile
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Optional, List
@@ -27,6 +29,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+logger = logging.getLogger("opl_standalone.super_opl")
 router = APIRouter()
 
 _ROOT       = Path(__file__).resolve().parent.parent
@@ -57,13 +60,30 @@ def _load() -> list:
         return []
     try:
         return json.loads(_OPL_FILE.read_text(encoding="utf-8"))
-    except Exception:
+    except json.JSONDecodeError as e:
+        logger.error("super_opl.json is corrupt: %s", e)
+        return []
+    except OSError as e:
+        logger.error("Cannot read super_opl.json: %s", e)
         return []
 
 
 def _save(entries: list):
+    """Atomic write: write to temp file then rename to avoid partial writes."""
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    _OPL_FILE.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
+    data = json.dumps(entries, indent=2, ensure_ascii=False)
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=_OUTPUT_DIR, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(data)
+            os.replace(tmp_path, _OPL_FILE)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+    except OSError as e:
+        logger.error("Failed to save super_opl.json: %s", e)
+        raise
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -102,6 +122,43 @@ class OPLEntry(BaseModel):
     input_by:       str = ""
     notes:          List[dict] = []
     attachments:    List[dict] = []
+
+
+class OPLUpdate(BaseModel):
+    """Allowed fields for PUT /api/opl/{id}. Immutable fields (id, created_at, input_date, input_by) are excluded."""
+    entry_type:     Optional[str] = None
+    parent_id:      Optional[str] = None
+    subject:        Optional[str] = None
+    description:    Optional[str] = None
+    remarks:        Optional[str] = None
+    last_note:      Optional[str] = None
+    owner:          Optional[str] = None
+    responsible:    Optional[List[str]] = None
+    information_to: Optional[List[str]] = None
+    topic_owner:    Optional[str] = None
+    sw_category:    Optional[str] = None
+    topic:          Optional[str] = None
+    sub_topic:      Optional[str] = None
+    category:       Optional[str] = None
+    source:         Optional[str] = None
+    register:       Optional[str] = None
+    tags:           Optional[List[str]] = None
+    sprint_tag:     Optional[str] = None
+    meeting:        Optional[str] = None
+    priority:       Optional[str] = None
+    status:         Optional[str] = None
+    risk_flag:      Optional[bool] = None
+    risk_impact:    Optional[str] = None
+    confidential:   Optional[bool] = None
+    pinned:         Optional[bool] = None
+    linked_risk_id: Optional[str] = None
+    start_date:     Optional[str] = None
+    due_date:       Optional[str] = None
+    closed_date:    Optional[str] = None
+    last_change_by: Optional[str] = None
+    notes:          Optional[List[dict]] = None
+    attachments:    Optional[List[dict]] = None
+    bosch_task_id:  Optional[str] = None
 
 
 class StatusUpdate(BaseModel):
@@ -171,36 +228,46 @@ def list_opl(
     page:     int = Query(1,     ge=1),
     limit:    int = Query(100,   ge=1, le=500),
 ):
-    entries = [_apply_overdue(e) for e in _load()]
-
     allowed = _SHOW_FILTERS.get(show)
-    if allowed is not None:
-        entries = [e for e in entries if e.get("status", "running") in allowed]
-    # Additional entry_type filters for special show modes
-    if show == "running_decisions":
-        entries = [e for e in entries if e.get("entry_type") == "Decision"]
-    elif show == "running_decisions_info":
-        entries = [e for e in entries if e.get("entry_type") in ("Decision", "Information")]
+    decision_only = show == "running_decisions"
+    decision_info_only = show == "running_decisions_info"
+    owner_q   = owner.lower() if owner else ""
+    category_q = category.lower() if category else ""
+    priority_q = priority.lower() if priority else ""
+    register_q = register.lower() if register else ""
+    tag_list  = [t.strip().lower() for t in tags.split(",") if t.strip()] if tags else []
+    search_q  = search.lower() if search else ""
 
-    if category:
-        entries = [e for e in entries if e.get("category", "").lower() == category.lower()]
-    if owner:
-        entries = [e for e in entries if e.get("owner", "").lower() == owner.lower()
-                   or owner.lower() in [r.lower() for r in e.get("responsible", [])]]
-    if priority:
-        entries = [e for e in entries if e.get("priority", "").lower() == priority.lower()]
-    if register:
-        entries = [e for e in entries if e.get("register", "").lower() == register.lower()]
-    if tags:
-        tag_list = [t.strip().lower() for t in tags.split(",") if t.strip()]
-        entries = [e for e in entries if any(t in [x.lower() for x in e.get("tags", [])] for t in tag_list)]
-    if search:
-        q = search.lower()
-        entries = [e for e in entries if
-                   q in e.get("subject", "").lower() or
-                   q in e.get("description", "").lower() or
-                   q in e.get("remarks", "").lower() or
-                   q in e.get("last_note", "").lower()]
+    def _matches(e: dict) -> bool:
+        e = _apply_overdue(e)
+        status = e.get("status", "running")
+        if allowed is not None and status not in allowed:
+            return False
+        et = e.get("entry_type", "")
+        if decision_only and et != "Decision":
+            return False
+        if decision_info_only and et not in ("Decision", "Information"):
+            return False
+        if category_q and e.get("category", "").lower() != category_q:
+            return False
+        if owner_q and e.get("owner", "").lower() != owner_q and owner_q not in [r.lower() for r in e.get("responsible", [])]:
+            return False
+        if priority_q and e.get("priority", "").lower() != priority_q:
+            return False
+        if register_q and e.get("register", "").lower() != register_q:
+            return False
+        if tag_list and not any(t in [x.lower() for x in e.get("tags", [])] for t in tag_list):
+            return False
+        if search_q and not (
+            search_q in e.get("subject", "").lower() or
+            search_q in e.get("description", "").lower() or
+            search_q in e.get("remarks", "").lower() or
+            search_q in e.get("last_note", "").lower()
+        ):
+            return False
+        return True
+
+    entries = [_apply_overdue(e) for e in _load() if _matches(e)]
 
     # Pinned items first, then by input_date desc
     entries.sort(key=lambda e: (not e.get("pinned", False), e.get("input_date", "") or ""), reverse=False)
@@ -249,18 +316,18 @@ def get_opl(entry_id: str):
 # ── PUT /api/opl/{id} ─────────────────────────────────────────────────────────
 
 @router.put("/api/opl/{entry_id}")
-def update_opl(entry_id: str, updates: dict):
+def update_opl(entry_id: str, updates: OPLUpdate):
     entries = _load()
     idx = next((i for i, e in enumerate(entries) if e["id"] == entry_id), None)
     if idx is None:
         raise HTTPException(status_code=404, detail=f"OPL entry '{entry_id}' not found")
-    protected = {"id", "created_at", "input_date", "input_by"}
-    for k, v in updates.items():
-        if k not in protected:
-            entries[idx][k] = v
+    # Only apply fields that were explicitly set (not None)
+    for k, v in updates.model_dump(exclude_none=True).items():
+        entries[idx][k] = v
     entries[idx]["last_change"]    = _now_iso()
-    entries[idx]["last_change_by"] = updates.get("last_change_by", entries[idx].get("last_change_by", ""))
+    entries[idx]["last_change_by"] = updates.last_change_by or entries[idx].get("last_change_by", "")
     _save(entries)
+    logger.info("Updated OPL entry %s: fields=%s", entry_id, list(updates.model_dump(exclude_none=True).keys()))
     return entries[idx]
 
 

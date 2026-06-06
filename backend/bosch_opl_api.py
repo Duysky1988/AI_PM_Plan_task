@@ -17,6 +17,8 @@ Bosch API reference:
 import json
 import logging
 import os
+import re
+import tempfile
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -42,13 +44,18 @@ def _get_opl_file() -> Path:
     return Path(os.getenv("OUTPUT_DIR", str(_ROOT / "outputs"))) / "super_opl.json"
 
 BOSCH_OPL_NUMBER = int(os.getenv("BOSCH_OPL_NUMBER", "340408"))
-BOSCH_API_KEY    = os.getenv("Super_OPL_API", "MjgwNDgzMjA5V1BWWFVNamcyTWpJM0")
-BOSCH_LOGIN_USER = os.getenv("BOSCH_LOGIN_USER", "gdn4hc")
+BOSCH_API_KEY    = os.getenv("Super_OPL_API", "")
+BOSCH_LOGIN_USER = os.getenv("BOSCH_LOGIN_USER", "")
 BOSCH_BASE_URL   = "https://rb-superopl.emea.bosch.com"
 PROXIES = {
     "https": os.getenv("HTTPS_PROXY", "http://rb-proxy-apac.bosch.com:8080"),
     "http":  os.getenv("HTTP_PROXY",  "http://rb-proxy-apac.bosch.com:8080"),
 }
+
+if not BOSCH_API_KEY:
+    logger.warning("Super_OPL_API not set — Bosch API calls will fail")
+if not BOSCH_LOGIN_USER:
+    logger.warning("BOSCH_LOGIN_USER not set — Bosch push/sync will fail")
 
 # ── Bosch task type mapping ────────────────────────────────────────────────────
 # Bosch: 1=Task, 2=Information, 3=Information(note?), 4=Decision, 5=Risk, 6=Problem
@@ -108,12 +115,30 @@ def _load_local() -> list:
         return []
     try:
         return json.loads(opl_file.read_text(encoding="utf-8"))
-    except Exception:
+    except json.JSONDecodeError as e:
+        logger.error("super_opl.json is corrupt: %s", e)
+        return []
+    except OSError as e:
+        logger.error("Cannot read super_opl.json: %s", e)
         return []
 
 
 def _save_local(entries: list):
-    _get_opl_file().write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    """Atomic write: write to temp file then rename to avoid partial writes."""
+    opl_file = _get_opl_file()
+    data = json.dumps(entries, ensure_ascii=False, indent=2)
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=opl_file.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(data)
+            os.replace(tmp_path, opl_file)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+    except OSError as e:
+        logger.error("Failed to save super_opl.json: %s", e)
+        raise
 
 
 def _bosch_task_to_local(t: dict) -> dict:
@@ -183,10 +208,11 @@ def _local_to_bosch_payload(entry: dict) -> dict:
     # (local entries created via UI only have display name like "Duy", not NT login)
     owner_login = entry.get("owner_login") or BOSCH_LOGIN_USER
 
-    # Bosch NT login is max 8 chars, all lowercase, no spaces (e.g. "gdn4hc")
+    # Bosch NT login: 1-8 chars, lowercase letters/digits only (e.g. "gdn4hc")
     # Display names like "Duy" or "Duy Nguyen" are not valid — fall back to login user
+    _NT_LOGIN_RE = re.compile(r'^[a-z0-9]{1,8}$')
     def _is_nt_login(s: str) -> bool:
-        return bool(s) and len(s) <= 8 and s.replace("_", "").isalnum() and s == s.lower()
+        return bool(s) and bool(_NT_LOGIN_RE.match(s))
 
     if not _is_nt_login(responsible):
         responsible = BOSCH_LOGIN_USER
@@ -376,12 +402,30 @@ def _load_risks() -> list:
         return []
     try:
         return json.loads(f.read_text(encoding="utf-8"))
-    except Exception:
+    except json.JSONDecodeError as e:
+        logger.error("bosch_risks.json is corrupt: %s", e)
+        return []
+    except OSError as e:
+        logger.error("Cannot read bosch_risks.json: %s", e)
         return []
 
 
 def _save_risks(entries: list):
-    _get_risk_file().write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    """Atomic write for risks file."""
+    f = _get_risk_file()
+    data = json.dumps(entries, ensure_ascii=False, indent=2)
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=f.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(data)
+            os.replace(tmp_path, f)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+    except OSError as e:
+        logger.error("Failed to save bosch_risks.json: %s", e)
+        raise
 
 
 def _measure_task_to_local(t: dict) -> dict:
@@ -595,12 +639,30 @@ def _load_lessons() -> list:
         return []
     try:
         return json.loads(f.read_text(encoding="utf-8"))
-    except Exception:
+    except json.JSONDecodeError as e:
+        logger.error("bosch_lessons.json is corrupt: %s", e)
+        return []
+    except OSError as e:
+        logger.error("Cannot read bosch_lessons.json: %s", e)
         return []
 
 
 def _save_lessons(entries: list):
-    _get_ll_file().write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    """Atomic write for lessons file."""
+    f = _get_ll_file()
+    data = json.dumps(entries, ensure_ascii=False, indent=2)
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=f.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(data)
+            os.replace(tmp_path, f)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+    except OSError as e:
+        logger.error("Failed to save bosch_lessons.json: %s", e)
+        raise
 
 
 def _bosch_ll_to_local(ll: dict) -> dict:

@@ -14,14 +14,18 @@ DELETE /api/planning/versions/{vid}      → delete a version
 """
 
 import json
+import logging
 import os
 import re
+import tempfile
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
+logger = logging.getLogger("opl_standalone.planning")
 
 router = APIRouter()
 
@@ -420,19 +424,32 @@ def _load_saved() -> dict:
         return {}
     try:
         return json.loads(_PLANNING_FILE.read_text(encoding="utf-8"))
-    except Exception:
+    except json.JSONDecodeError as e:
+        logger.error("planning_data.json is corrupt: %s", e)
+        return {}
+    except OSError as e:
+        logger.error("Cannot read planning_data.json: %s", e)
         return {}
 
 
 def _save_all(data: dict) -> str:
-    """Write the full dict to planning_data.json, return saved_at timestamp."""
+    """Atomic write to planning_data.json, return saved_at timestamp."""
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     saved_at = datetime.now().isoformat()
     data["saved_at"] = saved_at
-    _PLANNING_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=_OUTPUT_DIR, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+            os.replace(tmp_path, _PLANNING_FILE)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+    except OSError as e:
+        logger.error("Failed to save planning_data.json: %s", e)
+        raise
     return saved_at
 
 
@@ -552,16 +569,30 @@ def _load_versions() -> dict:
         return {}
     try:
         return json.loads(_VERSIONS_FILE.read_text(encoding="utf-8"))
-    except Exception:
+    except json.JSONDecodeError as e:
+        logger.error("planning_versions.json is corrupt: %s", e)
+        return {}
+    except OSError as e:
+        logger.error("Cannot read planning_versions.json: %s", e)
         return {}
 
 
 def _save_versions(data: dict) -> None:
+    """Atomic write for versions file."""
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    _VERSIONS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=_OUTPUT_DIR, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+            os.replace(tmp_path, _VERSIONS_FILE)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+    except OSError as e:
+        logger.error("Failed to save planning_versions.json: %s", e)
+        raise
 
 
 def _diff_summary(old_tasks: list[dict], new_tasks: list[dict]) -> str:
