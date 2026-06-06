@@ -23,6 +23,13 @@ outputs/
 # Claude Code local settings
 .claude/settings.local.json
 
+# CodeGraph index (local knowledge graph, not committed)
+.codegraph/
+
+# Understand-Anything (intermediate scratch only — commit knowledge-graph.json)
+.understand-anything/intermediate/
+.understand-anything/diff-overlay.json
+
 # OS
 Thumbs.db
 desktop.ini
