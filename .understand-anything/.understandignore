@@ -1,0 +1,15 @@
+# .understandignore
+# Built-in defaults always excluded: node_modules/, .git/, dist/, .venv/, *.lock, etc.
+
+# --- Project-specific exclusions ---
+html/standalone.html
+.codegraph/
+.understand-anything/
+outputs/
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+*.bat
+skills-lock.json
+backend/prompts/
+backend/__init__.py

@@ -78,7 +78,8 @@ All data is persisted as flat JSON files inside `outputs/` (created at first run
 | `backend/bosch_opl_api.py` | Bridge to `rb-superopl.emea.bosch.com`; sync/push/pull |
 | `backend/planning_api.py` | Gantt task management; versioned snapshots (max 50) |
 | `backend/project_config.py` | Multi-project config loader from `projects/*.json`; fallback to hardcoded DMC VCCU |
-| `backend/ci_index.py` | CI lookup from `CI_Status_report.xlsx` |
+| `backend/ci_index.py` | CI lookup from `CI_Status_report.xlsx`; in-memory index keyed by CI ID (e.g. `CI-0016`) |
+| `backend/prompts/system_prompts.py` | System prompt strings — not wired into this standalone tool; kept for future use |
 | `frontend/src/` | React + TypeScript source — **edit here, not standalone.html** |
 | `frontend/src/api/client.ts` | Typed API client for all backend endpoints |
 | `frontend/src/types/index.ts` | TypeScript types: OPLEntry, Risk, PlanningTask, etc. |
@@ -123,12 +124,17 @@ frontend/src/
 ### Build → standalone.html
 `npm run build` in `frontend/` → TypeScript check → Vite build → auto-renames `html/index.html` to `html/standalone.html`
 
+In production (`standalone.html`), the Python HTTP server injects `window.__API_BASE__` so that `api/client.ts` points to `http://127.0.0.1:8000`. In dev mode (`localhost:5173`), Vite proxies `/api/*` to port 8000 directly — no injection needed.
+
+### Inline styles in App.tsx
+`App.tsx` uses inline `style={{...}}` for the top-level layout shell (header, nav, main). This is intentional — those values are static layout constants, not component-scoped CSS. Do not move them to CSS files; it would break the single-file bundle structure.
+
 ## Data Conventions
 
 - **IDs:** Integer, assigned as `max(existing_ids) + 1`. Never reused.
 - **Soft delete:** OPL entries set `status = "deleted"`, never physically removed from `super_opl.json`.
 - **Bosch sync:** Idempotent — matched via `bosch_task_id` field; local entries with a `bosch_task_id` are treated as synced.
-- **Planning versions:** Keyed by `sheet` (master, sw, peru, opl); capped at 50 snapshots per sheet (oldest deleted).
+- **Planning versions:** Keyed by `sheet` (`master`, `sw`, `peru`, `opl`); capped at 50 snapshots per sheet (oldest deleted). `master` and `sw` load from `Project_document/Project_plan_mpp_extract.xlsx` on first access; `opl` is populated from OPL entries directly; `peru` starts empty.
 - **Status auto-upgrade:** On any `GET /api/opl` response, entries with `due_date < today` and non-terminal status are returned as `overdue` (not saved, computed on read).
 - **Atomic writes:** All JSON saves use temp-file + `os.replace()` to prevent corruption on crash.
 
